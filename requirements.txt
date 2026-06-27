@@ -1,3 +1,5 @@
 python-telegram-bot[all]==21.6
 yt-dlp==2024.12.23
 aiofiles==24.1.0
+python-dotenv==1.0.0
+instaloader==4.10.3

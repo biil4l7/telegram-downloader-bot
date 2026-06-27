@@ -1,0 +1,49 @@
+# ============================================================
+#  render.yaml — Render.com Deployment Configuration
+# ============================================================
+
+services:
+  - type: worker          # Background worker (no HTTP port needed)
+    name: telegram-downloader-bot
+    runtime: python
+    region: oregon         # Change: frankfurt, singapore, ohio, virginia
+    plan: free             # free | starter | standard | pro
+
+    buildCommand: |
+      apt-get update -y
+      apt-get install -y ffmpeg
+      pip install --upgrade pip
+      pip install -r requirements.txt
+
+    startCommand: python src/bot.py
+
+    envVars:
+      - key: BOT_TOKEN
+        sync: false        # Set manually in Render dashboard (never commit!)
+
+      - key: INSTAGRAM_USERNAME
+        sync: false
+
+      - key: INSTAGRAM_PASSWORD
+        sync: false
+
+      - key: FACEBOOK_EMAIL
+        sync: false
+
+      - key: FACEBOOK_PASSWORD
+        sync: false
+
+      - key: LOG_LEVEL
+        value: INFO
+
+      - key: PYTHONUNBUFFERED
+        value: "1"
+
+      - key: PYTHONPATH
+        value: /opt/render/project/src
+
+    # Persistent disk for downloads (prevents OOM on free tier)
+    disk:
+      name: bot-storage
+      mountPath: /opt/render/project/src/downloads
+      sizeGB: 1

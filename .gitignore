@@ -1,0 +1,51 @@
+# ============================================================
+#  .gitignore — Telegram Downloader Bot
+# ============================================================
+
+# Environment & secrets — NEVER commit these
+.env
+*.env
+.env.*
+!.env.example
+
+# Downloaded media files
+downloads/
+*.mp4
+*.mp3
+*.m4a
+*.webm
+*.mkv
+
+# Logs
+logs/
+*.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+ENV/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# yt-dlp cache
+.cache/

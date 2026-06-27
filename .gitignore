@@ -49,3 +49,6 @@ Thumbs.db
 
 # yt-dlp cache
 .cache/
+
+ig_cookies.txt
+ig_cookies_netscape.txt

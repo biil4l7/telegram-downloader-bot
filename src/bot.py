@@ -4,6 +4,8 @@ load_dotenv()
 import logging
 import os
 import asyncio
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update, BotCommand
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
@@ -20,12 +22,34 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("❌ BOT_TOKEN not found in environment variables!")
 
+PORT = int(os.environ.get("PORT", 8080))
+
+
+# ── Tiny health-check HTTP server (keeps Render Web Service happy) ────────
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+    def log_message(self, format, *args):
+        pass  # Silence access logs
+
+
+def run_health_server():
+    server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
+    logger.info(f"🌐 Health server running on port {PORT}")
+    server.serve_forever()
+
+
+# ── Bot setup ─────────────────────────────────────────────────────────────
 async def set_commands(app: Application):
     commands = [
         BotCommand("start", "🚀 Start the bot"),
         BotCommand("help", "ℹ️ How to use the bot"),
     ]
     await app.bot.set_my_commands(commands)
+
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Exception: {context.error}", exc_info=context.error)
@@ -34,8 +58,13 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
             "⚠️ Something went wrong. Please try again or send another link."
         )
 
+
 def main():
     logger.info("🤖 Starting Downloader Bot...")
+
+    # Start health server in background thread
+    health_thread = threading.Thread(target=run_health_server, daemon=True)
+    health_thread.start()
 
     async def run():
         app = Application.builder().token(BOT_TOKEN).build()
@@ -55,9 +84,10 @@ def main():
                 allowed_updates=Update.ALL_TYPES,
                 drop_pending_updates=True
             )
-            await asyncio.Event().wait()  # Run forever until Ctrl+C
+            await asyncio.Event().wait()
 
     asyncio.run(run())
+
 
 if __name__ == "__main__":
     main()

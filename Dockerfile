@@ -17,5 +17,8 @@ RUN mkdir -p downloads logs
 
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
+ENV PORT=8080
+
+EXPOSE 8080
 
 CMD ["python", "src/bot.py"]

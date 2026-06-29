@@ -1,5 +1,4 @@
 import os
-import re
 import uuid
 import json
 import logging
@@ -9,30 +8,62 @@ logger = logging.getLogger(__name__)
 DOWNLOAD_DIR = os.path.join(os.path.dirname(__file__), "../../downloads")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# Possible cookie file locations (local + Render secret file path)
+# Cookie file locations — checked in order
 YT_COOKIE_PATHS = [
-    "/etc/secrets/yt_cookies.txt",                                          # Render secret file
-    os.path.join(os.path.dirname(__file__), "../../yt_cookies.txt"),        # Local file
+    "/etc/secrets/yt_cookies.txt",                                           # Render secret file
+    os.path.join(os.path.dirname(__file__), "../../yt_cookies.txt"),         # Local Netscape file
     os.path.join(os.path.dirname(__file__), "../../yt_cookies_netscape.txt"),
 ]
 
-IG_COOKIE_PATHS = [
-    "/etc/secrets/ig_cookies.txt",
-    os.path.join(os.path.dirname(__file__), "../../ig_cookies_netscape.txt"),
-    os.path.join(os.path.dirname(__file__), "../../ig_cookies.txt"),
-]
+# Always write converted/temp cookies here (writable on all platforms)
+TMP_YT_COOKIES = "/tmp/yt_cookies_netscape.txt"
 
 
-def _find_cookie_file(paths: list) -> str | None:
-    for p in paths:
-        if os.path.exists(p):
-            logger.info(f"Using cookies: {p}")
-            return p
+def _write_netscape(cookies: list, path: str):
+    lines = ["# Netscape HTTP Cookie File", ""]
+    for c in cookies:
+        domain = c.get("domain", ".youtube.com")
+        if not domain.startswith("."):
+            domain = "." + domain
+        path_ = c.get("path", "/")
+        secure = "TRUE" if c.get("secure", False) else "FALSE"
+        expiry = int(c.get("expirationDate", 0))
+        name = c.get("name", "")
+        value = c.get("value", "")
+        lines.append(f"{domain}\tTRUE\t{path_}\t{secure}\t{expiry}\t{name}\t{value}")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+    logger.info(f"Wrote {len(cookies)} YT cookies to {path}")
+
+
+def _get_yt_cookies() -> str | None:
+    for p in YT_COOKIE_PATHS:
+        if not os.path.exists(p):
+            continue
+        with open(p, "r", encoding="utf-8") as f:
+            content = f.read().strip()
+        if content.startswith("["):
+            # JSON format — convert to Netscape in /tmp
+            try:
+                cookies = json.loads(content)
+                _write_netscape(cookies, TMP_YT_COOKIES)
+                logger.info(f"Converted JSON cookies from {p}")
+                return TMP_YT_COOKIES
+            except Exception as e:
+                logger.warning(f"Failed to convert {p}: {e}")
+        else:
+            # Already Netscape — copy to /tmp to ensure it's readable
+            import shutil
+            shutil.copy2(p, TMP_YT_COOKIES)
+            logger.info(f"Using cookies from {p}")
+            return TMP_YT_COOKIES
+
+    logger.warning("No YouTube cookies found")
     return None
 
 
 def _base_ydl_opts(extra: dict = {}) -> dict:
-    cookies = _find_cookie_file(YT_COOKIE_PATHS)
+    cookies = _get_yt_cookies()
     opts = {
         "quiet": True,
         "no_warnings": True,
@@ -101,7 +132,7 @@ def get_youtube_formats(url: str) -> list[dict]:
             "height": h,
         })
 
-    logger.info(f"YT formats found: {[o['label'] for o in options]}")
+    logger.info(f"YT formats: {[o['label'] for o in options]}")
     return options
 
 

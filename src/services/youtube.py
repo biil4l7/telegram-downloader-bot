@@ -16,15 +16,14 @@ YT_COOKIE_PATHS = [
 ]
 TMP_YT_COOKIES = "/tmp/yt_cookies.txt"
 
-# Quality ladder: (height, label, format_string)
 QUALITY_LADDER = [
-    (2160, "4K Ultra HD",   "bestvideo[height<=2160][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=2160]+bestaudio/best[height<=2160]"),
-    (1440, "2K QHD",        "bestvideo[height<=1440][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1440]+bestaudio/best[height<=1440]"),
-    (1080, "1080p Full HD", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]"),
-    (720,  "720p HD",       "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best[height<=720]"),
-    (480,  "480p",          "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=480]+bestaudio/best[height<=480]"),
-    (360,  "360p",          "bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=360]+bestaudio/best[height<=360]"),
-    (240,  "240p",          "bestvideo[height<=240][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=240]+bestaudio/best[height<=240]"),
+    (2160, "4K Ultra HD"),
+    (1440, "2K QHD"),
+    (1080, "1080p Full HD"),
+    (720,  "720p HD"),
+    (480,  "480p"),
+    (360,  "360p"),
+    (240,  "240p"),
 ]
 
 
@@ -36,7 +35,6 @@ def _get_yt_cookies() -> str | None:
             with open(p, "r", encoding="utf-8") as f:
                 content = f.read().strip()
             if content.startswith("["):
-                # JSON — convert to Netscape in /tmp
                 cookies = json.loads(content)
                 lines = ["# Netscape HTTP Cookie File", ""]
                 for c in cookies:
@@ -51,13 +49,11 @@ def _get_yt_cookies() -> str | None:
                 logger.info(f"Converted JSON cookies from {p}")
                 return TMP_YT_COOKIES
             else:
-                # Netscape — copy to /tmp
                 shutil.copy2(p, TMP_YT_COOKIES)
-                logger.info(f"Using cookies from {p}")
+                logger.info(f"Copied cookies from {p}")
                 return TMP_YT_COOKIES
         except Exception as e:
-            logger.warning(f"Cookie error for {p}: {e}")
-    logger.warning("No YouTube cookies found")
+            logger.warning(f"Cookie error {p}: {e}")
     return None
 
 
@@ -68,8 +64,12 @@ def _ydl_opts(extra: dict = {}) -> dict:
         "no_warnings": True,
         "noprogress": True,
         "noplaylist": True,
+        # Try multiple clients — po_token bypass
         "extractor_args": {
-            "youtube": {"player_client": ["ios", "android", "web"]}
+            "youtube": {
+                "player_client": ["tv", "ios", "android", "web"],
+                "player_skip": ["webpage"],
+            }
         },
         "http_headers": {
             "User-Agent": (
@@ -86,10 +86,6 @@ def _ydl_opts(extra: dict = {}) -> dict:
 
 
 def get_youtube_formats(url: str) -> list[dict]:
-    """
-    Probe which quality rungs actually exist for this video,
-    using height-based format strings (no raw format IDs).
-    """
     probe_opts = _ydl_opts({"skip_download": True})
     with yt_dlp.YoutubeDL(probe_opts) as ydl:
         info = ydl.extract_info(url, download=False)
@@ -104,29 +100,27 @@ def get_youtube_formats(url: str) -> list[dict]:
 
     logger.info(f"Available heights: {sorted(available_heights, reverse=True)}")
 
-    options = []
-    for (rung, label, fmt_str) in QUALITY_LADDER:
-        # Include rung if any available height is within range
-        if any(rung * 0.85 <= h <= rung * 1.15 or h >= rung for h in available_heights):
-            options.append({
-                "label": f"🎥 {label}",
-                "format_id": fmt_str,   # Store full format string, not raw ID
-                "height": rung,
-            })
-
-    if not options:
-        # Fallback — show all rungs
-        options = [
-            {"label": f"🎥 {label}", "format_id": fmt_str, "height": rung}
-            for rung, label, fmt_str in QUALITY_LADDER
+    if not available_heights:
+        # Return full ladder as fallback
+        return [
+            {"label": f"🎥 {label}", "format_id": f"bv[height<={h}]+ba/b[height<={h}]/b", "height": h}
+            for h, label in QUALITY_LADDER
         ]
 
-    logger.info(f"Offering {len(options)} quality options")
-    return options
+    max_h = max(available_heights)
+    options = []
+    for (rung, label) in QUALITY_LADDER:
+        if max_h >= rung * 0.75:
+            fmt = f"bestvideo[height<={rung}]+bestaudio/best[height<={rung}]/best"
+            options.append({"label": f"🎥 {label}", "format_id": fmt, "height": rung})
+
+    logger.info(f"Offering {len(options)} options")
+    return options if options else [
+        {"label": "🎥 Best Available", "format_id": "bestvideo+bestaudio/best", "height": 0}
+    ]
 
 
 def download_youtube(url: str, format_id: str) -> str:
-    """format_id is either 'mp3_audio' or a full yt-dlp format string."""
     uid = str(uuid.uuid4())[:8]
     output_template = os.path.join(DOWNLOAD_DIR, f"yt_{uid}.%(ext)s")
     is_mp3 = format_id == "mp3_audio"
@@ -148,7 +142,7 @@ def download_youtube(url: str, format_id: str) -> str:
             "merge_output_format": "mp4",
         })
 
-    logger.info(f"Downloading YT | format={format_id[:60]}")
+    logger.info(f"Downloading YT | format={format_id[:80]}")
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
         filename = ydl.prepare_filename(info)

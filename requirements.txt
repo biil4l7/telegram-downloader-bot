@@ -1,4 +1,4 @@
 python-telegram-bot[all]==21.6
-yt-dlp==2024.12.23
+yt-dlp
 aiofiles==24.1.0
 python-dotenv==1.0.0

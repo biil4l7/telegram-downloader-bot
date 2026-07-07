@@ -1,6 +1,7 @@
 import os
 import uuid
 import json
+import shutil
 import logging
 import yt_dlp
 
@@ -27,6 +28,26 @@ IG_HEADERS = {
     "Origin": "https://www.instagram.com",
 }
 
+# Detect whether ffmpeg is available on this machine
+FFMPEG_AVAILABLE = shutil.which("ffmpeg") is not None
+logger.info(f"ffmpeg available: {FFMPEG_AVAILABLE}")
+
+# ── Format strategy ───────────────────────────────────────────────────────────
+# If ffmpeg is present  → merge best video + best audio into mp4 (highest quality)
+# If ffmpeg is missing  → download a single pre-merged file (video+audio in one stream)
+#   Instagram/stories serve "combined" mp4 streams — we pick those first.
+#   The key selectors are:
+#     - vcodec!=none AND acodec!=none  → single file that already has both tracks
+#     - "best[ext=mp4]"                → yt-dlp picks the best combined mp4
+#     - "best"                         → absolute fallback
+if FFMPEG_AVAILABLE:
+    FORMAT_PRIMARY   = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best"
+    FORMAT_FALLBACK  = "best[ext=mp4]/best"
+else:
+    # Force a pre-merged stream — no ffmpeg needed
+    FORMAT_PRIMARY   = "best[vcodec!=none][acodec!=none][ext=mp4]/best[vcodec!=none][acodec!=none]/best[ext=mp4]/best"
+    FORMAT_FALLBACK  = "best"
+
 
 def _write_netscape(cookies: list, path: str):
     lines = ["# Netscape HTTP Cookie File", ""]
@@ -37,8 +58,8 @@ def _write_netscape(cookies: list, path: str):
         path_ = c.get("path", "/")
         secure = "TRUE" if c.get("secure", False) else "FALSE"
         expiry = int(c.get("expirationDate", 0))
-        name = c.get("name", "")
-        value = c.get("value", "")
+        name   = c.get("name", "")
+        value  = c.get("value", "")
         lines.append(f"{domain}\tTRUE\t{path_}\t{secure}\t{expiry}\t{name}\t{value}")
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
@@ -51,7 +72,6 @@ def _get_cookies_path() -> str | None:
         with open(p, "r", encoding="utf-8") as f:
             content = f.read().strip()
         if content.startswith("["):
-            # JSON format — convert
             try:
                 cookies = json.loads(content)
                 _write_netscape(cookies, COOKIES_NETSCAPE)
@@ -66,18 +86,20 @@ def _get_cookies_path() -> str | None:
     return None
 
 
-def _base_opts(uid: str, cookies_path: str | None) -> dict:
+def _base_opts(uid: str, cookies_path: str | None, fmt: str) -> dict:
     opts = {
         "outtmpl": os.path.join(DOWNLOAD_DIR, f"ig_{uid}.%(ext)s"),
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,
-        "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best",
-        "merge_output_format": "mp4",
+        "format": fmt,
         "http_headers": IG_HEADERS,
         "socket_timeout": 30,
         "retries": 3,
     }
+    # Only set merge_output_format when ffmpeg can actually do the merge
+    if FFMPEG_AVAILABLE:
+        opts["merge_output_format"] = "mp4"
     if cookies_path:
         opts["cookiefile"] = cookies_path
     return opts
@@ -87,18 +109,29 @@ def download_instagram(url: str) -> str:
     uid = str(uuid.uuid4())[:8]
     cookies_path = _get_cookies_path()
     clean_url = url.split("?")[0].rstrip("/") + "/"
-    logger.info(f"Instagram | url={clean_url} | cookies={'yes' if cookies_path else 'no'}")
 
-    for attempt, (u, fmt) in enumerate([
-        (clean_url, None),
-        (url, None),
-        (clean_url, "best"),
-    ], 1):
+    logger.info(
+        f"Instagram | url={clean_url} | "
+        f"cookies={'yes' if cookies_path else 'no'} | "
+        f"ffmpeg={FFMPEG_AVAILABLE}"
+    )
+
+    # Attempt order:
+    #   1. clean URL + primary format
+    #   2. original URL + primary format   (some story URLs need the original)
+    #   3. clean URL + fallback format
+    attempts = [
+        (clean_url, FORMAT_PRIMARY),
+        (url,       FORMAT_PRIMARY),
+        (clean_url, FORMAT_FALLBACK),
+    ]
+
+    for attempt, (u, fmt) in enumerate(attempts, 1):
         try:
-            opts = _base_opts(uid, cookies_path)
-            if fmt:
-                opts["format"] = fmt
-            return _do_download(opts, u, uid)
+            opts = _base_opts(uid, cookies_path, fmt)
+            result = _do_download(opts, u, uid)
+            logger.info(f"Instagram success on attempt {attempt} | file={result}")
+            return result
         except Exception as e:
             logger.warning(f"IG attempt {attempt} failed: {e}")
 
@@ -120,10 +153,11 @@ def _do_download(ydl_opts: dict, url: str, uid: str) -> str:
         if os.path.exists(candidate):
             return candidate
 
+    # Fallback: find by uid in downloads dir
     for f in sorted(
         os.listdir(DOWNLOAD_DIR),
         key=lambda x: os.path.getmtime(os.path.join(DOWNLOAD_DIR, x)),
-        reverse=True
+        reverse=True,
     ):
         if uid in f:
             return os.path.join(DOWNLOAD_DIR, f)

@@ -28,25 +28,15 @@ IG_HEADERS = {
     "Origin": "https://www.instagram.com",
 }
 
-# Detect whether ffmpeg is available on this machine
 FFMPEG_AVAILABLE = shutil.which("ffmpeg") is not None
 logger.info(f"ffmpeg available: {FFMPEG_AVAILABLE}")
 
-# ── Format strategy ───────────────────────────────────────────────────────────
-# If ffmpeg is present  → merge best video + best audio into mp4 (highest quality)
-# If ffmpeg is missing  → download a single pre-merged file (video+audio in one stream)
-#   Instagram/stories serve "combined" mp4 streams — we pick those first.
-#   The key selectors are:
-#     - vcodec!=none AND acodec!=none  → single file that already has both tracks
-#     - "best[ext=mp4]"                → yt-dlp picks the best combined mp4
-#     - "best"                         → absolute fallback
 if FFMPEG_AVAILABLE:
-    FORMAT_PRIMARY   = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best"
-    FORMAT_FALLBACK  = "best[ext=mp4]/best"
+    FORMAT_PRIMARY  = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best"
+    FORMAT_FALLBACK = "best[ext=mp4]/best"
 else:
-    # Force a pre-merged stream — no ffmpeg needed
-    FORMAT_PRIMARY   = "best[vcodec!=none][acodec!=none][ext=mp4]/best[vcodec!=none][acodec!=none]/best[ext=mp4]/best"
-    FORMAT_FALLBACK  = "best"
+    FORMAT_PRIMARY  = "best[vcodec!=none][acodec!=none][ext=mp4]/best[vcodec!=none][acodec!=none]/best[ext=mp4]/best"
+    FORMAT_FALLBACK = "best"
 
 
 def _write_netscape(cookies: list, path: str):
@@ -97,11 +87,14 @@ def _base_opts(uid: str, cookies_path: str | None, fmt: str) -> dict:
         "socket_timeout": 30,
         "retries": 3,
     }
-    # Only set merge_output_format when ffmpeg can actually do the merge
     if FFMPEG_AVAILABLE:
         opts["merge_output_format"] = "mp4"
     if cookies_path:
         opts["cookiefile"] = cookies_path
+
+    # ── DEBUG LINE — remove after confirming audio works ──
+    logger.info(f"IG ydl_opts format: {opts['format']} | ffmpeg: {FFMPEG_AVAILABLE}")
+
     return opts
 
 
@@ -116,10 +109,6 @@ def download_instagram(url: str) -> str:
         f"ffmpeg={FFMPEG_AVAILABLE}"
     )
 
-    # Attempt order:
-    #   1. clean URL + primary format
-    #   2. original URL + primary format   (some story URLs need the original)
-    #   3. clean URL + fallback format
     attempts = [
         (clean_url, FORMAT_PRIMARY),
         (url,       FORMAT_PRIMARY),
@@ -147,13 +136,15 @@ def _do_download(ydl_opts: dict, url: str, uid: str) -> str:
                 info = entries[0]
         filename = ydl.prepare_filename(info)
 
+    # ── DEBUG: log what yt-dlp actually selected ──
+    logger.info(f"IG downloaded file: {filename}")
+
     base = os.path.splitext(filename)[0]
     for ext in ["mp4", "webm", "mkv", "mov", "m4v"]:
         candidate = f"{base}.{ext}"
         if os.path.exists(candidate):
             return candidate
 
-    # Fallback: find by uid in downloads dir
     for f in sorted(
         os.listdir(DOWNLOAD_DIR),
         key=lambda x: os.path.getmtime(os.path.join(DOWNLOAD_DIR, x)),
